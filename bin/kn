@@ -315,7 +315,9 @@ def cmd_ask(args: argparse.Namespace) -> None:
         snippet = " ".join(snippet.split())
         print(f"\n{index}. [{result.get('source_type')}] {result.get('title') or '(untitled)'}")
         print(f"   {result.get('source_uri')}")
-        print(f"   {result.get('event_at') or 'no date'} · score {result.get('score')} · {result.get('scope')}")
+        score = result.get("score") or 0
+        score_text = f"score {score}" if score else "no IDF signal"
+        print(f"   {result.get('event_at') or 'no date'} · {score_text} · {result.get('scope')}")
         if snippet:
             print(f"   {snippet[:300]}")
 
