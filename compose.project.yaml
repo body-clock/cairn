@@ -1,0 +1,50 @@
+# One knowledge store for one repository.
+#
+# `bin/kn up` generates a compose override that mounts the repository and its
+# session bucket, then runs this file under the project name `knowledge-<name>`.
+# Required environment: PROJECT_CONFIG_HOST, KNOWLEDGE_PORT.
+services:
+  knowledge:
+    build: .
+    image: kn:local
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${KNOWLEDGE_PORT}:8765"
+    environment:
+      KNOWLEDGE_DB: /data/knowledge.db
+      KNOWLEDGE_TOKEN: ${KNOWLEDGE_TOKEN:-}
+      KNOWLEDGE_NAME: ${KNOWLEDGE_NAME:-}
+      PROJECT_CONFIG: /config/project.json
+      HOST: 0.0.0.0
+      PORT: "8765"
+    volumes:
+      - knowledge-data:/data
+      - ${PROJECT_CONFIG_HOST}:/config/project.json:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  collector:
+    build: .
+    image: kn:local
+    init: true
+    restart: unless-stopped
+    entrypoint: ["python", "-m", "collector.collect"]
+    command: ["--loop"]
+    depends_on:
+      knowledge:
+        condition: service_healthy
+    environment:
+      KNOWLEDGE_DB: /data/knowledge.db
+      PROJECT_CONFIG: /config/project.json
+      COLLECT_INTERVAL_SECONDS: ${COLLECT_INTERVAL_SECONDS:-900}
+    volumes:
+      - knowledge-data:/data
+      - ${PROJECT_CONFIG_HOST}:/config/project.json:ro
+
+volumes:
+  knowledge-data:

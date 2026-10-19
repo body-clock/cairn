@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Knowledge stores</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1b1b19; --muted: #6b6b66;
+    --line: #e2e2dc; --accent: #2f6f4f; --accent-soft: #e8f1eb;
+    --warn: #8a5a00; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141614; --panel: #1c1f1c; --ink: #ecece6; --muted: #9a9d95;
+      --line: #2e322e; --accent: #8fc3a6; --accent-soft: #22332a;
+      --warn: #d9a85a;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: grid; grid-template-columns: 270px 1fr; grid-template-rows: auto 1fr;
+    grid-template-areas: "brand brand" "side main";
+  }
+  header { grid-area: brand; display: flex; align-items: baseline; gap: 16px;
+    padding: 16px 22px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  header button { margin-left: auto; }
+  button {
+    font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 11px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  aside { grid-area: side; border-right: 1px solid var(--line); padding: 14px; overflow-y: auto; }
+  aside h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; }
+  .store { width: 100%; text-align: left; margin-bottom: 8px; display: grid; gap: 2px; }
+  .store[aria-current="true"] { border-color: var(--accent); background: var(--accent-soft); }
+  .store strong { font-weight: 600; }
+  .store span { color: var(--muted); font-size: 12px; }
+  main { grid-area: main; padding: 20px 24px 60px; overflow-y: auto; }
+  .summary { display: flex; gap: 18px; flex-wrap: wrap; align-items: baseline; margin-bottom: 16px; }
+  .summary h2 { margin: 0; font-size: 20px; }
+  .summary .facts { color: var(--muted); font-size: 13px; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 22px; }
+  @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } body { grid-template-columns: 1fr; grid-template-areas: "brand" "side" "main"; } aside { border-right: 0; border-bottom: 1px solid var(--line); max-height: 220px; } }
+  h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 0 0 8px; }
+  form.search { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  form.search input[type="search"] { flex: 1 1 260px; min-width: 180px; }
+  input, select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .results { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .result { width: 100%; text-align: left; display: grid; gap: 4px; }
+  .result .head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .result .title { font-weight: 600; }
+  .result .snippet { color: var(--muted); font-size: 13px; }
+  .result mark { background: var(--accent-soft); color: inherit; border-radius: 3px; padding: 0 2px; }
+  .badge { font: 11px/1 var(--mono); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 3px 7px; }
+  .badge.git { color: #3d6fd8; border-color: #3d6fd8; }
+  .badge.session { color: #8a5a00; border-color: #8a5a00; }
+  .badge.doc { color: #2f6f4f; border-color: #2f6f4f; }
+  .badge.umami, .badge.plausible_export, .badge.search_console_export { color: #7a4fa0; border-color: #7a4fa0; }
+  .score { font: 12px var(--mono); color: var(--muted); margin-left: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .empty { color: var(--muted); font-size: 13px; padding: 10px 0; }
+  dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink); width: min(860px, 92vw); max-height: 86vh; padding: 0; }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  .doc-head { padding: 16px 18px; border-bottom: 1px solid var(--line); display: grid; gap: 6px; position: sticky; top: 0; background: var(--panel); }
+  .doc-head h2 { margin: 0; font-size: 16px; padding-right: 32px; }
+  .doc-meta { color: var(--muted); font: 12px/1.5 var(--mono); overflow-wrap: anywhere; }
+  .doc-body { padding: 16px 18px; overflow: auto; }
+  pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.55 var(--mono); }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+  .dialog-close { position: absolute; top: 12px; right: 12px; }
+  .status-line { color: var(--muted); font-size: 12px; min-height: 18px; }
+  .raw { margin-top: 10px; }
+  .raw pre { max-height: 260px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Knowledge stores</h1>
+  <p>Local inspection · read-only</p>
+  <button id="refresh" type="button">Refresh</button>
+</header>
+
+<aside>
+  <h2>Running</h2>
+  <div id="stores"></div>
+  <p class="empty" id="stores-empty" hidden>No stores answered on 8765–8790.</p>
+</aside>
+
+<main>
+  <section class="summary">
+    <h2 id="store-name">Select a store</h2>
+    <span class="facts" id="store-facts"></span>
+  </section>
+
+  <div class="grid">
+    <section>
+      <h3>Search</h3>
+      <form class="search" id="search-form">
+        <input id="q" type="search" placeholder="Search this store…" autocomplete="off" aria-label="Search query">
+        <select id="scope" aria-label="Scope"><option value="">all scopes</option></select>
+        <select id="type" aria-label="Source type"><option value="">all sources</option></select>
+        <button type="submit">Search</button>
+      </form>
+      <p class="status-line" id="search-status" aria-live="polite"></p>
+      <ul class="results" id="results"></ul>
+    </section>
+
+    <section>
+      <h3>Corpus</h3>
+      <table>
+        <thead><tr><th>Source</th><th class="num">Records</th><th>Latest</th></tr></thead>
+        <tbody id="sources"></tbody>
+      </table>
+      <div class="raw">
+        <button type="button" id="raw-toggle" aria-expanded="false">Raw JSON</button>
+        <div id="raw-panel" hidden>
+          <p class="status-line" id="raw-path"></p>
+          <pre id="raw-body"></pre>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<dialog id="doc-dialog" aria-labelledby="doc-title">
+  <div class="doc-head">
+    <h2 id="doc-title"></h2>
+    <div class="doc-meta" id="doc-meta"></div>
+    <button type="button" class="dialog-close" id="doc-close" aria-label="Close">Esc</button>
+  </div>
+  <div class="doc-body">
+    <pre id="doc-text"></pre>
+    <details><summary>Atoms</summary><pre id="doc-atoms"></pre></details>
+    <details><summary>Metadata</summary><pre id="doc-metadata"></pre></details>
+  </div>
+</dialog>
+
+<script>
+const state = { stores: [], port: null, results: [], raw: null, rawPath: "" };
+
+const $ = (id) => document.getElementById(id);
+
+function node(tag, props = {}, children = []) {
+  const element = document.createElement(tag);
+  for (const [key, value] of Object.entries(props)) {
+    if (key === "class") element.className = value;
+    else if (key === "text") element.textContent = value;
+    else if (key.startsWith("aria-") || key === "role") element.setAttribute(key, value);
+    else element[key] = value;
+  }
+  for (const child of [].concat(children)) {
+    if (child) element.append(child);
+  }
+  return element;
+}
+
+function highlighted(text) {
+  const fragment = document.createDocumentFragment();
+  const parts = String(text || "").split(/\[\[(.+?)\]\]/g);
+  parts.forEach((part, index) => {
+    fragment.append(index % 2 ? node("mark", { text: part }) : document.createTextNode(part));
+  });
+  return fragment;
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return "—";
+  return (bytes / 1024 / 1024).toFixed(1) + " MB";
+}
+
+async function api(path) {
+  const response = await fetch(path);
+  const payload = await response.json().catch(() => ({ error: response.statusText }));
+  if (!response.ok) throw new Error(payload.error || response.statusText);
+  return payload;
+}
+
+function recordRaw(path, payload) {
+  state.raw = payload;
+  state.rawPath = path;
+  if (!$("raw-panel").hidden) renderRaw();
+}
+
+function renderRaw() {
+  $("raw-path").textContent = state.rawPath ? `GET ${state.rawPath}` : "";
+  $("raw-body").textContent = state.raw ? JSON.stringify(state.raw, null, 2) : "";
+}
+
+function setRaw(button, path, payload) {
+  recordRaw(path, payload);
+  const open = $("raw-panel").hidden;
+  $("raw-panel").hidden = !open;
+  button.setAttribute("aria-expanded", String(open));
+  if (open) renderRaw();
+}
+
+async function loadStores(refresh = false) {
+  const path = "/api/stores" + (refresh ? "?refresh=1" : "");
+  const payload = await api(path);
+  recordRaw(path, payload);
+  state.stores = payload.stores;
+  renderStores();
+  if (state.stores.length && !state.stores.some((store) => store.port === state.port)) {
+    selectStore(state.stores[0].port);
+  }
+  $("stores-empty").hidden = state.stores.length > 0;
+}
+
+function renderStores() {
+  const list = $("stores");
+  list.replaceChildren();
+  for (const store of state.stores) {
+    const button = node("button", { class: "store", type: "button", "aria-current": String(store.port === state.port) }, [
+      node("strong", { text: store.name }),
+      node("span", { text: `port ${store.port} · ${store.documents} records` }),
+    ]);
+    button.addEventListener("click", () => selectStore(store.port));
+    list.append(button);
+  }
+}
+
+async function selectStore(port) {
+  state.port = port;
+  state.results = [];
+  $("results").replaceChildren();
+  $("search-status").textContent = "";
+  renderStores();
+  const store = state.stores.find((item) => item.port === port);
+  $("store-name").textContent = store ? store.name : `store ${port}`;
+  $("store-facts").textContent = store ? `127.0.0.1:${port} · ${store.documents} records · ${formatBytes(store.bytes)}` : "";
+
+  const [status, sources] = await Promise.all([
+    api(`/api/store/${port}/status`),
+    api(`/api/store/${port}/sources`),
+  ]);
+  recordRaw(`/api/store/${port}/status`, status);
+  renderStatus(status);
+  renderSources(sources);
+}
+
+function renderStatus(status) {
+  const tbody = $("sources");
+  tbody.replaceChildren();
+  for (const row of status.by_source || []) {
+    tbody.append(node("tr", {}, [
+      node("td", { text: row.source_type }),
+      node("td", { class: "num", text: String(row.documents) }),
+      node("td", { text: (row.latest_event || "").slice(0, 10) }),
+    ]));
+  }
+}
+
+function renderSources(payload) {
+  const scopes = new Set();
+  const types = new Set();
+  for (const row of payload.source_types || []) { types.add(row.source_type); scopes.add(row.scope); }
+  const scope = $("scope");
+  const type = $("type");
+  const scopeValue = scope.value;
+  const typeValue = type.value;
+  scope.replaceChildren(node("option", { value: "", text: "all scopes" }));
+  type.replaceChildren(node("option", { value: "", text: "all sources" }));
+  for (const value of [...scopes].sort()) scope.append(node("option", { value, text: value }));
+  for (const value of [...types].sort()) type.append(node("option", { value, text: value }));
+  scope.value = scopeValue;
+  type.value = typeValue;
+}
+
+async function runSearch(event) {
+  event?.preventDefault();
+  if (!state.port) return;
+  const q = $("q").value.trim();
+  if (!q) return;
+  const params = new URLSearchParams({ q, limit: "12" });
+  if ($("scope").value) params.set("scope", $("scope").value);
+  if ($("type").value) params.set("source_type", $("type").value);
+  const path = `/api/store/${state.port}/search?${params}`;
+  $("search-status").textContent = "Searching…";
+  try {
+    const payload = await api(path);
+    recordRaw(path, payload);
+    state.results = payload.results || [];
+    renderResults(payload);
+  } catch (error) {
+    $("search-status").textContent = error.message;
+  }
+}
+
+function renderResults(payload) {
+  const list = $("results");
+  list.replaceChildren();
+  $("search-status").textContent = `${payload.count ?? 0} result${payload.count === 1 ? "" : "s"}`;
+  if (!state.results.length) {
+    list.append(node("li", { class: "empty", text: "No matches in this store." }));
+    return;
+  }
+  for (const result of state.results) {
+    const head = node("div", { class: "head" }, [
+      node("span", { class: `badge ${result.source_type}`, text: result.source_type }),
+      node("span", { class: "title", text: result.title || "(untitled)" }),
+      node("span", { class: "score", text: Number(result.score).toFixed(1) }),
+    ]);
+    const snippet = node("div", { class: "snippet" });
+    snippet.append(highlighted(result.snippet));
+    const meta = node("div", { class: "snippet", text: `${result.scope} · ${result.event_at || "no date"}` });
+    const button = node("button", { class: "result", type: "button" }, [head, snippet, meta]);
+    button.addEventListener("click", () => openDocument(result.id));
+    list.append(node("li", {}, button));
+  }
+}
+
+async function openDocument(id) {
+  if (!state.port) return;
+  const path = `/api/store/${state.port}/document/${encodeURIComponent(id)}?max_chars=20000`;
+  try {
+    const doc = await api(path);
+    recordRaw(path, doc);
+    $("doc-title").textContent = doc.title || "(untitled)";
+    $("doc-meta").textContent = `${doc.source_type} · ${doc.scope} · ${doc.event_at || "no date"} · ${doc.source_uri}`;
+    $("doc-text").textContent = doc.body || "";
+    $("doc-atoms").textContent = doc.notes || "(none)";
+    $("doc-metadata").textContent = JSON.stringify(doc.metadata || {}, null, 2);
+    $("doc-dialog").showModal();
+  } catch (error) {
+    $("search-status").textContent = error.message;
+  }
+}
+
+$("search-form").addEventListener("submit", runSearch);
+$("refresh").addEventListener("click", () => loadStores(true));
+$("doc-close").addEventListener("click", () => $("doc-dialog").close());
+$("doc-dialog").addEventListener("click", (event) => {
+  if (event.target === $("doc-dialog")) $("doc-dialog").close();
+});
+$("raw-toggle").addEventListener("click", (event) => {
+  const open = $("raw-panel").hidden;
+  $("raw-panel").hidden = !open;
+  event.currentTarget.setAttribute("aria-expanded", String(open));
+  if (open) renderRaw();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && $("doc-dialog").open) $("doc-dialog").close();
+  if (event.key === "/" && document.activeElement.tagName !== "INPUT" && document.activeElement.tagName !== "SELECT") {
+    event.preventDefault();
+    $("q").focus();
+  }
+});
+
+loadStores().catch((error) => { $("search-status").textContent = error.message; });
+</script>
+</body>
+</html>

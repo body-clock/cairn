@@ -1,0 +1,63 @@
+services:
+  knowledge:
+    build: .
+    image: kn:local
+    init: true
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      KNOWLEDGE_DB: /data/knowledge.db
+      KNOWLEDGE_TOKEN: ${KNOWLEDGE_TOKEN:-}
+      KNOWLEDGE_NAME: printlyrics
+      HOST: 0.0.0.0
+      PORT: "8765"
+    volumes:
+      - knowledge-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  collector:
+    build: .
+    image: kn:local
+    init: true
+    restart: unless-stopped
+    entrypoint: ["python", "-m", "collector.collect"]
+    command: ["--loop"]
+    depends_on:
+      knowledge:
+        condition: service_healthy
+    environment:
+      KNOWLEDGE_DB: /data/knowledge.db
+      COLLECT_INTERVAL_SECONDS: ${COLLECT_INTERVAL_SECONDS:-900}
+      PRINTLYRICS_REPO: /sources/printlyrics
+      IDEATION_REPO: /sources/ideation/lyric-sync
+      ANALYTICS_REPO: /sources/analytics-connector
+      SESSIONS_ROOT: /sources/sessions
+      EXPORTS_DIR: /sources/exports
+      UMAMI_SNAPSHOT_DIR: /sources/umami
+      UMAMI_LIVE_DIR: /data/umami-live
+      APP_DB: /sources/printlyrics/storage/development.sqlite3
+      SOURCE_PROJECTS: ${SOURCE_PROJECTS:-printlyrics,printlyrics-ideation,printlyrics-analytics}
+      UMAMI_URL: ${UMAMI_URL:-https://analytics.printlyrics.app}
+      UMAMI_WEBSITE_ID: ${UMAMI_WEBSITE_ID:-ea5c0e32-fcc8-4081-814e-085e7dfefa20}
+      UMAMI_START: ${UMAMI_START:-2026-09-30T04:05:18.000Z}
+      UMAMI_END: ${UMAMI_END:-}
+      UMAMI_API_KEY: ${UMAMI_API_KEY:-}
+    volumes:
+      - knowledge-data:/data
+      - umami-live:/data/umami-live
+      - ${PRINTLYRICS_REPO:-../printlyrics}:/sources/printlyrics:ro
+      - ${IDEATION_REPO:-../ideation/lyric-sync}:/sources/ideation/lyric-sync:ro
+      - ${ANALYTICS_REPO:-../analytics-connector}:/sources/analytics-connector:ro
+      - ${HOME}/.omp/agent/sessions:/sources/sessions:ro
+      - ./data/exports:/sources/exports:ro
+      - ./data/umami:/sources/umami:ro
+
+volumes:
+  knowledge-data:
+  umami-live:

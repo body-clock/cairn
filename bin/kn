@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+"""Run a personal knowledge store for the current repository.
+
+    kn init      write .knowledge.json for this repo
+    kn up        build, start, and collect once
+    kn collect   run one collection pass
+    kn status    print corpus counts
+    kn mcp       print the MCP client entry (--register writes it)
+    kn down      stop the containers, keep the database
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+VERSION = "0.1.0"
+ROOT = Path(__file__).resolve().parent.parent
+HOME = Path.home()
+SESSIONS_ROOT = HOME / ".omp" / "agent" / "sessions"
+STATE_PATH = HOME / ".omp" / "knowledge" / "projects.json"
+RUN_ROOT = HOME / ".omp" / "knowledge" / "run"
+MCP_CONFIG = HOME / ".omp" / "agent" / "mcp.json"
+BASE_COMPOSE = ROOT / "compose.project.yaml"
+
+DEFAULT_DOCS = [
+    "README.md",
+    "AGENTS.md",
+    "docs/**/*.md",
+    "db/schema.rb",
+    "config/routes.rb",
+    "config/deploy.yml",
+]
+
+
+def fail(message: str) -> "None":
+    print(f"kn: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def repo_root(start: Path) -> Path:
+    result = subprocess.run(
+        ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return Path(result.stdout.strip())
+    return start
+
+
+def slug(value: str) -> str:
+    cleaned = "".join(ch.lower() if ch.isalnum() else "-" for ch in value)
+    while "--" in cleaned:
+        cleaned = cleaned.replace("--", "-")
+    return cleaned.strip("-")[:63] or "project"
+
+
+def encoded_cwd(path: Path) -> str:
+    canonical = path.resolve()
+    try:
+        relative = canonical.relative_to(HOME.resolve())
+    except ValueError:
+        return f"--{str(canonical).replace('/', '-')}--"
+    return "-" + str(relative).replace("/", "-")
+
+
+def session_bucket(path: Path) -> str | None:
+    bucket = encoded_cwd(path)
+    return bucket if (SESSIONS_ROOT / bucket).is_dir() else None
+
+
+def port_free(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
+def load_state() -> dict:
+    try:
+        data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_state(state: dict) -> None:
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATE_PATH.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def project_port(repo: Path, name: str) -> int:
+    state = load_state()
+    key = str(repo.resolve())
+    existing = state.get(key, {}).get("port")
+    if isinstance(existing, int) and (port_free(existing) or _is_our_port(name, existing)):
+        return existing
+    for port in range(8766, 8900):
+        if port_free(port):
+            state[key] = {"name": name, "port": port}
+            save_state(state)
+            return port
+    fail("no free port in 8766-8899")
+
+
+def _is_our_port(name: str, port: int) -> bool:
+    """A port is ours when the compose project already publishes it."""
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--filter", f"publish={port}", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False
+    return f"knowledge-{name}" in result.stdout
+
+
+def find_config(start: Path) -> Path:
+    root = repo_root(start)
+    config = root / ".knowledge.json"
+    if not config.exists():
+        fail(f"no .knowledge.json in {root}; run `kn init` first")
+    return config
+
+
+def read_config(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"cannot read {path}: {exc}")
+    if not isinstance(data, dict) or not data.get("name"):
+        fail(f"{path} must be an object with a name")
+    return data
+
+
+def cmd_init(args: argparse.Namespace) -> None:
+    repo = repo_root(Path(args.dir or os.getcwd()).resolve())
+    config_path = repo / ".knowledge.json"
+    if config_path.exists() and not args.force:
+        fail(f"{config_path} already exists; pass --force to rewrite it")
+    name = slug(args.name or repo.name)
+    bucket = session_bucket(repo)
+    app_db = repo / "storage" / "development.sqlite3"
+    commits = subprocess.run(
+        ["git", "-C", str(repo), "rev-list", "--count", "--all"],
+        capture_output=True,
+        text=True,
+    )
+    git_limit = 800
+    if commits.returncode == 0 and commits.stdout.strip().isdigit():
+        git_limit = min(20000, max(800, int(commits.stdout.strip())))
+    doc_repos = []
+    for extra in args.doc or []:
+        extra_path = Path(extra).expanduser().resolve()
+        if not extra_path.is_dir():
+            fail(f"doc repo not found: {extra_path}")
+        doc_name = slug(extra_path.name)
+        container_path = f"/sources/docs/{doc_name}"
+        host_path = os.path.relpath(extra_path, repo)
+        doc_repos.append({
+            "name": doc_name,
+            "host": host_path,
+            "repo": container_path,
+            "scope": f"{name}/docs",
+            "patterns": ["README.md", "docs/**/*.md", "doc/**/*.md"],
+        })
+    config = {
+        "version": 1,
+        "name": name,
+        "scope": name,
+        "repo": "/sources/repo",
+        "docs": DEFAULT_DOCS,
+        "doc_repos": doc_repos,
+        "sessions": {bucket: name} if bucket else {},
+        "app_db": "/sources/repo/storage/development.sqlite3" if app_db.exists() else None,
+        "git": True,
+        "git_limit": git_limit,
+    }
+    config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    print(f"wrote {config_path}")
+    print(f"  name     {name}")
+    print(f"  sessions {bucket or '(none — no session bucket for this cwd)'}")
+    for extra in doc_repos:
+        print(f"  docs     {extra['host']} -> {extra['repo']} ({extra['scope']})")
+    print(f"  port     {project_port(repo, name)}")
+
+
+def compose_env(config_path: Path, config: dict, port: int) -> tuple[dict, list[str]]:
+    repo = config_path.parent
+    run_dir = RUN_ROOT / str(config["name"])
+    run_dir.mkdir(parents=True, exist_ok=True)
+    override_path = run_dir / "compose.override.yaml"
+    bucket = next(iter((config.get("sessions") or {})), None)
+    volumes = [
+        "      - " + json.dumps(f"{repo}:/sources/repo:ro"),
+    ]
+    if bucket and (SESSIONS_ROOT / bucket).is_dir():
+        volumes.append(
+            "      - " + json.dumps(f"{SESSIONS_ROOT / bucket}:/sources/sessions/{bucket}:ro")
+        )
+    for extra in config.get("doc_repos") or []:
+        host = extra.get("host")
+        if not host:
+            continue
+        extra_path = (config_path.parent / host).resolve()
+        if not extra_path.is_dir():
+            fail(f"doc repo missing: {extra_path}")
+        volumes.append("      - " + json.dumps(f"{extra_path}:{extra['repo']}:ro"))
+    override_path.write_text(
+        "services:\n  collector:\n    volumes:\n" + "\n".join(volumes) + "\n",
+        encoding="utf-8",
+    )
+    env = dict(os.environ)
+    env.update(
+        {
+            "PROJECT_CONFIG_HOST": str(config_path.resolve()),
+            "KNOWLEDGE_PORT": str(port),
+            "KNOWLEDGE_NAME": str(config["name"]),
+            "COMPOSE_PROJECT_NAME": f"knowledge-{config['name']}",
+        }
+    )
+    command = [
+        "docker", "compose",
+        "-p", f"knowledge-{config['name']}",
+        "-f", str(BASE_COMPOSE),
+        "-f", str(override_path),
+    ]
+    return env, command
+
+
+def cmd_up(args: argparse.Namespace) -> None:
+    config_path = Path(args.config).resolve() if args.config else find_config(Path.cwd())
+    config = read_config(config_path)
+    port = project_port(config_path.parent, config["name"])
+    env, command = compose_env(config_path, config, port)
+    print(f"starting knowledge-{config['name']} on http://127.0.0.1:{port}")
+    result = subprocess.run(command + ["up", "-d", "--build"], cwd=ROOT, env=env)
+    if result.returncode != 0:
+        fail("docker compose up failed")
+    result = subprocess.run(command + ["run", "--rm", "collector", "--once"], cwd=ROOT, env=env)
+    if result.returncode != 0:
+        fail("first collection failed")
+    print(f"ready: http://127.0.0.1:{port}/mcp")
+
+
+def cmd_collect(args: argparse.Namespace) -> None:
+    config_path = Path(args.config).resolve() if args.config else find_config(Path.cwd())
+    config = read_config(config_path)
+    port = project_port(config_path.parent, config["name"])
+    env, command = compose_env(config_path, config, port)
+    result = subprocess.run(command + ["run", "--rm", "collector", "--once"], cwd=ROOT, env=env)
+    if result.returncode != 0:
+        fail("collection failed")
+
+
+def cmd_status(args: argparse.Namespace) -> None:
+    config_path = Path(args.config).resolve() if args.config else find_config(Path.cwd())
+    config = read_config(config_path)
+    port = project_port(config_path.parent, config["name"])
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/status", timeout=10) as response:
+            payload = json.load(response)
+    except (urllib.error.URLError, OSError) as exc:
+        fail(f"knowledge-{config['name']} is not answering on port {port}: {exc}")
+    print(f"{config['name']}: {payload.get('documents')} documents, {payload.get('database_bytes')} bytes")
+    for source in payload.get("by_source", []):
+        print(f"  {source['source_type']:22} {source['documents']:5}  latest {source.get('latest_event')}")
+    print(f"  url http://127.0.0.1:{port}/mcp")
+
+
+def cmd_ask(args: argparse.Namespace) -> None:
+    config_path = Path(args.config).resolve() if args.config else find_config(Path.cwd())
+    config = read_config(config_path)
+    port = project_port(config_path.parent, config["name"])
+    question = " ".join(args.question).strip()
+    if not question:
+        fail("ask needs a question")
+    params = {"q": question, "limit": str(max(1, min(args.limit, 50)))}
+    if args.scope:
+        params["scope"] = args.scope
+    if args.source_type:
+        params["source_type"] = args.source_type
+    url = f"http://127.0.0.1:{port}/search?{urllib.parse.urlencode(params)}"
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            payload = json.load(response)
+    except (urllib.error.URLError, OSError) as exc:
+        fail(f"{config['name']} is not answering on port {port}: {exc}\nrun `kn up` first")
+    elapsed = (time.monotonic() - started) * 1000
+    if args.json:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return
+    results = payload.get("results") or []
+    print(f"{payload.get('count', 0)} hits · {elapsed:.0f} ms · {config['name']}")
+    if not results:
+        print("no matches; try fewer words or a wider scope")
+        return
+    for index, result in enumerate(results, start=1):
+        snippet = (result.get("snippet") or "").replace("[[", "").replace("]]", "")
+        snippet = " ".join(snippet.split())
+        print(f"\n{index}. [{result.get('source_type')}] {result.get('title') or '(untitled)'}")
+        print(f"   {result.get('source_uri')}")
+        print(f"   {result.get('event_at') or 'no date'} · score {result.get('score')} · {result.get('scope')}")
+        if snippet:
+            print(f"   {snippet[:300]}")
+
+
+def cmd_mcp(args: argparse.Namespace) -> None:
+    config_path = Path(args.config).resolve() if args.config else find_config(Path.cwd())
+    config = read_config(config_path)
+    port = project_port(config_path.parent, config["name"])
+    server = f"{config['name']}-knowledge"
+    entry = {"type": "http", "url": f"http://127.0.0.1:{port}/mcp", "timeout": 30000}
+    if not args.register:
+        print(json.dumps({"mcpServers": {server: entry}}, indent=2))
+        print(f"\nAdd it to {MCP_CONFIG}, or rerun with --register.", file=sys.stderr)
+        return
+    try:
+        data = json.loads(MCP_CONFIG.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"cannot read {MCP_CONFIG}: {exc}")
+    servers = data.setdefault("mcpServers", {})
+    servers[server] = entry
+    MCP_CONFIG.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    print(f"registered {server} in {MCP_CONFIG}")
+    print("run /mcp reload in omp to pick it up")
+
+
+def cmd_down(args: argparse.Namespace) -> None:
+    config_path = Path(args.config).resolve() if args.config else find_config(Path.cwd())
+    config = read_config(config_path)
+    port = project_port(config_path.parent, config["name"])
+    env, command = compose_env(config_path, config, port)
+    subprocess.run(command + ["down"], cwd=ROOT, env=env)
+    print(f"stopped knowledge-{config['name']} (database volume kept)")
+
+
+def cmd_info(args: argparse.Namespace) -> None:
+    config_path = Path(args.config).resolve() if args.config else find_config(Path.cwd())
+    config = read_config(config_path)
+    port = project_port(config_path.parent, config["name"])
+    print(json.dumps({**config, "port": port, "config": str(config_path)}, indent=2))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="kn", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--version", action="version", version=f"kn {VERSION}")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    init = sub.add_parser("init", help="write .knowledge.json for a repository")
+    init.add_argument("--dir", help="repository directory (default: cwd)")
+    init.add_argument("--name", help="project name (default: directory name)")
+    init.add_argument("--doc", action="append", help="extra documentation repository (repeatable)")
+    init.add_argument("--force", action="store_true", help="rewrite an existing config")
+    init.set_defaults(func=cmd_init)
+
+    for name, func, text in (
+        ("up", cmd_up, "build, start, and collect once"),
+        ("collect", cmd_collect, "run one collection pass"),
+        ("status", cmd_status, "print corpus counts"),
+        ("down", cmd_down, "stop the containers"),
+        ("info", cmd_info, "print the resolved configuration"),
+    ):
+        subparser = sub.add_parser(name, help=text)
+        subparser.add_argument("--config", help="path to .knowledge.json")
+        subparser.set_defaults(func=func)
+
+    ask = sub.add_parser("ask", help="search this store and print cited hits")
+    ask.add_argument("question", nargs="+", help="words to search for")
+    ask.add_argument("--config", help="path to .knowledge.json")
+    ask.add_argument("--limit", type=int, default=8, help="number of hits (default 8)")
+    ask.add_argument("--scope", help="restrict to a scope prefix")
+    ask.add_argument("--source-type", help="restrict to one source type")
+    ask.add_argument("--json", action="store_true", help="print the raw search response")
+    ask.set_defaults(func=cmd_ask)
+
+    mcp = sub.add_parser("mcp", help="print the MCP client entry")
+    mcp.add_argument("--config", help="path to .knowledge.json")
+    mcp.add_argument("--register", action="store_true", help="write the entry into ~/.omp/agent/mcp.json")
+    mcp.set_defaults(func=cmd_mcp)
+
+    args = parser.parse_args()
+    args.func(args)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
