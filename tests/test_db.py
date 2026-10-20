@@ -148,5 +148,77 @@ class KnowledgeDbTest(unittest.TestCase):
         }))
 
 
+class LintTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.tmp.name, "knowledge.db")
+        self.conn = db.connect(self.path)
+        db.init_db(self.conn)
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def wiki(self, doc_id, claim, status, sources, valid_to="", scope="demo"):
+        return {
+            "id": doc_id,
+            "source_type": "wiki",
+            "source_group": "wiki:test",
+            "source_key": f"wiki/{doc_id}.md",
+            "source_uri": f"repo://demo/wiki/{doc_id}.md#L1-8",
+            "scope": scope,
+            "title": claim,
+            "summary": claim,
+            "body": claim,
+            "event_at": "2026-10-20T00:00:00Z",
+            "content_hash": doc_id,
+            "authority": 0.9,
+            "metadata": {"claim": claim, "status": status, "sources": sources, "valid_to": valid_to},
+        }
+
+    def record(self, doc_id, uri, scope="demo"):
+        return {
+            "id": doc_id,
+            "source_type": "doc",
+            "source_group": "doc:test",
+            "source_key": doc_id,
+            "source_uri": uri,
+            "scope": scope,
+            "title": doc_id,
+            "summary": doc_id,
+            "body": doc_id,
+            "event_at": "2026-10-19T00:00:00Z",
+            "content_hash": doc_id,
+            "authority": 0.8,
+            "metadata": {},
+        }
+
+    def test_flags_missing_sources_contested_and_uncited(self):
+        db.upsert_documents(self.conn, [
+            self.wiki("w1", "Store is isolated", "verified", ["repo://demo/a.md#L1-2"]),
+            self.wiki("w2", "Store is shared", "contested", []),
+            self.record("a", "repo://demo/a.md#L1-2"),
+            self.record("b", "repo://demo/b.md#L1-2"),
+        ])
+        result = db.lint(self.conn)
+        counts = {finding["kind"]: finding["count"] for finding in result["findings"]}
+        self.assertEqual(result["wiki_pages"], 2)
+        self.assertEqual(result["claims"], 2)
+        self.assertEqual(counts["wiki_without_sources"], 1)
+        self.assertEqual(counts["contested"], 1)
+        self.assertEqual(counts["stale"], 0)
+        self.assertEqual(counts["uncited_sources"], 1)
+        self.assertFalse(result["clean"])
+
+    def test_clean_when_every_claim_cites_a_source(self):
+        db.upsert_documents(self.conn, [
+            self.wiki("w1", "Store is isolated", "verified", ["repo://demo/a.md#L1-2"]),
+            self.record("a", "repo://demo/a.md#L1-2"),
+        ])
+        result = db.lint(self.conn)
+        self.assertTrue(result["clean"])
+        self.assertEqual(result["claims"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

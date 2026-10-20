@@ -44,6 +44,32 @@ class ProjectConfigTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 project_config.load(path)
 
+    def test_frontmatter_is_metadata_not_body(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "claim.md")
+            path.write_text(
+                "---\n"
+                'claim: "The store is isolated"\n'
+                "status: verified\n"
+                "owner: demo\n"
+                "sources:\n"
+                '  - "repo://demo/a.md#L1-2"\n'
+                "---\n"
+                "# Claim\n\nEach repository gets its own store.\n",
+                encoding="utf-8",
+            )
+            documents = docs_collector.document_for_file(
+                path, tmp, "claim.md", "demo", "demo", "demo", source_type="wiki"
+            )
+            metadata = documents[0]["metadata"]
+            self.assertEqual(metadata["frontmatter"]["claim"], "The store is isolated")
+            self.assertEqual(metadata["status"], "verified")
+            self.assertEqual(metadata["sources"], ["repo://demo/a.md#L1-2"])
+            self.assertNotIn("claim:", documents[0]["body"])
+            self.assertGreater(documents[0]["metadata"]["line_range"][0], 6)
+            self.assertEqual(documents[0]["source_type"], "wiki")
+            self.assertEqual(documents[0]["authority"], 0.9)
+
     def test_repeated_heading_keeps_both_sections(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp, "notes.md")
@@ -98,6 +124,14 @@ class ProjectConfigTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
+            wiki = Path(repo, "wiki")
+            wiki.mkdir()
+            (wiki / "claim.md").write_text(
+                "---\nclaim: \"Chosen SQLite\"\nstatus: verified\nsources:\n"
+                '  - "repo://demo/README.md#L1-4"\n---\n# Claim\n\nSQLite.\n',
+                encoding="utf-8",
+            )
+
             ops_repo = Path(tmp, "opscode")
             (ops_repo / "doc").mkdir(parents=True)
             (ops_repo / "doc" / "opensearch.md").write_text(
@@ -109,6 +143,7 @@ class ProjectConfigTest(unittest.TestCase):
                 "scope": "demo",
                 "repo": str(repo),
                 "docs": ["README.md"],
+                "wiki": ["wiki/**/*.md"],
                 "doc_repos": [{
                     "name": "opsdoc",
                     "repo": str(ops_repo),
@@ -133,6 +168,7 @@ class ProjectConfigTest(unittest.TestCase):
 
             self.assertEqual(summary["git"]["documents"], 1)
             self.assertGreaterEqual(summary["docs"]["documents"], 1)
+            self.assertGreaterEqual(summary["wiki"]["documents"], 1)
             self.assertEqual(summary["docs:opsdoc"]["documents"], 1)
             self.assertGreaterEqual(summary["sessions"]["documents"], 1)
 

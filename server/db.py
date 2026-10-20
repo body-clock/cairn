@@ -387,6 +387,86 @@ def get_document(conn: sqlite3.Connection, doc_id: str, max_chars: int = 20000) 
     }
 
 
+def lint(conn: sqlite3.Connection, scope: str | None = None, limit: int = 20) -> dict[str, Any]:
+    """Mechanical health checks over wiki claims and their cited sources."""
+    clauses = ["status='active'"]
+    params: list[Any] = []
+    if scope:
+        clauses.append("scope LIKE ?")
+        params.append(f"{scope}%")
+    rows = conn.execute(
+        f"""
+        SELECT id, title, source_type, source_uri, scope, event_at, metadata_json
+          FROM documents
+         WHERE {' AND '.join(clauses)}
+        """,
+        params,
+    ).fetchall()
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    wiki: list[dict[str, Any]] = []
+    for row in rows:
+        metadata: dict[str, Any] = {}
+        try:
+            metadata = json.loads(row["metadata_json"] or "{}")
+        except json.JSONDecodeError:
+            pass
+        if row["source_type"] != "wiki":
+            continue
+        wiki.append({
+            "id": row["id"],
+            "title": row["title"],
+            "source_uri": row["source_uri"],
+            "claim": str(
+                metadata.get("claim")
+                or (metadata.get("frontmatter") or {}).get("claim")
+                or ""
+            ).strip(),
+            "status": str(metadata.get("status") or "").strip().lower(),
+            "sources": [str(item) for item in (metadata.get("sources") or [])],
+            "valid_to": str(metadata.get("valid_to") or "").strip(),
+        })
+
+    claims = [page for page in wiki if page["claim"]]
+    missing_sources = [page for page in claims if not page["sources"]]
+    contested = [page for page in claims if page["status"] in ("contested", "needs_review")]
+    stale = [
+        page for page in claims
+        if page["status"] == "stale" or (page["valid_to"] and page["valid_to"][:10] < today)
+    ]
+
+    cited = {source for page in claims for source in page["sources"]}
+    uncited = [
+        row for row in rows
+        if row["source_type"] != "wiki" and row["source_uri"] not in cited
+    ] if claims else []
+
+    def examples(items: list[dict[str, Any]]) -> list[dict[str, str]]:
+        return [
+            {
+                "id": item["id"],
+                "title": item["title"],
+                "source_uri": item["source_uri"],
+            }
+            for item in items[:limit]
+        ]
+
+    findings = [
+        {"kind": "wiki_without_sources", "count": len(missing_sources), "examples": examples(missing_sources)},
+        {"kind": "contested", "count": len(contested), "examples": examples(contested)},
+        {"kind": "stale", "count": len(stale), "examples": examples(stale)},
+        {"kind": "uncited_sources", "count": len(uncited), "examples": examples(uncited)},
+    ]
+    return {
+        "scope": scope,
+        "documents": len(rows),
+        "wiki_pages": len(wiki),
+        "claims": len(claims),
+        "findings": findings,
+        "clean": not any(finding["count"] for finding in findings),
+    }
+
+
 def status(conn: sqlite3.Connection, db_path: str | None = None) -> dict[str, Any]:
     by_source = [
         dict(row)

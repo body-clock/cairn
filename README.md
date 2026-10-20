@@ -92,7 +92,7 @@ count. It writes one small manifest:
 ```
 
 Ports are allocated from 8766 upward and recorded in
-`~/.omp/knowledge/projects.json`. Each project runs as its own compose project
+`~/.cairn/projects.json`. Each project runs as its own compose project
 (`cairn-<name>`) with its own `knowledge-data` volume, so stores never mix.
 
 ## What gets indexed
@@ -102,12 +102,44 @@ Ports are allocated from 8766 upward and recorded in
 | `git` | Commit messages, authors, dates, changed files | All refs, stash artifacts included |
 | `doc` | Markdown and selected config/schema files | Chunked by heading; extracted atoms (errors, commands, decisions) |
 | `session` | omp agent transcripts | Chunked with line anchors; thinking traces skipped; tool output truncated |
+| `wiki` | Agent-maintained claim pages under `wiki/` | Frontmatter becomes metadata; higher authority |
 | `doc_repos` | Extra documentation repositories | Own scope, own `source_group` |
 | `app_db` | Development SQLite schema and row counts | Schema only, never row contents |
 
 Redaction runs before indexing: bearer tokens, cloud keys, private keys,
 password assignments, and email addresses are replaced. Tool output is capped
 per record.
+
+## Compounding wiki (optional)
+
+Retrieval rediscovers knowledge on every question. A wiki compiles it once and
+keeps it current. `cairn init --wiki` scaffolds `CAIRN.md`, `wiki/index.md`, and
+`wiki/log.md`; the agent writes claim pages, and Cairn indexes them as
+`source_type=wiki`.
+
+```yaml
+---
+claim: "Each repository gets its own store."
+status: verified          # verified | contested | stale | retired
+owner: body-clock
+valid_from: 2026-10-20
+valid_to:
+sources:
+  - "repo://cairn/README.md#L1-10"
+---
+```
+
+`cairn lint` checks the mechanical invariants:
+
+| Finding | Meaning |
+|---|---|
+| `wiki_without_sources` | A claim page cites no exact `source_uri` |
+| `contested` | `status: contested` or `needs_review` |
+| `stale` | `status: stale`, or `valid_to` has passed |
+| `uncited_sources` | Indexed records no claim references (a backlog, not an error) |
+
+The wiki is plain markdown in your repo; the SQLite store is an index over it,
+not the source of truth.
 
 ## Architecture
 
@@ -136,10 +168,11 @@ flowchart LR
 
 | Command | Does |
 |---|---|
-| `cairn init [--name N] [--doc PATH]… [--force]` | Write `.cairn.json` |
+| `cairn init [--name N] [--doc PATH]… [--wiki] [--force]` | Write `.cairn.json`; `--wiki` scaffolds `CAIRN.md` and `wiki/` |
 | `cairn up` | Build, start, and collect once |
 | `cairn collect` | Run one collection pass |
 | `cairn ask Q [--limit N] [--scope S] [--source-type T] [--json]` | Search and print cited hits |
+| `cairn lint [--scope S] [--json]` | Check claims against sources |
 | `cairn status` | Corpus counts and latest event per source |
 | `cairn mcp [--register]` | Print or install the MCP client entry |
 | `cairn info` | Resolved configuration |
@@ -152,7 +185,7 @@ The store serves Streamable HTTP:
 ```json
 {
   "mcpServers": {
-    "my-project-knowledge": {
+    "my-project-cairn": {
       "type": "http",
       "url": "http://127.0.0.1:8766/mcp"
     }

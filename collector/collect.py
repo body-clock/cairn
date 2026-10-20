@@ -90,6 +90,20 @@ def _run_configured(conn: sqlite3.Connection, config: project_config.ProjectConf
             conn, config.repo, config.name, config.scope, config.name, list(config.docs)
         ),
     )
+    if config.wiki:
+        summary["wiki"] = _run_source(
+            conn,
+            "wiki",
+            lambda: docs.collect_repo(
+                conn,
+                config.repo,
+                config.name,
+                config.scope,
+                config.name,
+                list(config.wiki),
+                source_type="wiki",
+            ),
+        )
     for extra in config.doc_repos:
         summary[f"docs:{extra.name}"] = _run_source(
             conn,

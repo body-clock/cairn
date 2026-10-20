@@ -186,6 +186,22 @@ def read_config(path: Path) -> dict:
     return data
 
 
+def _scaffold_wiki(repo: Path) -> list[Path]:
+    """Copy the wiki schema and starter pages without overwriting."""
+    written: list[Path] = []
+    for source, target in (
+        (ROOT / "templates" / "CAIRN.md", repo / "CAIRN.md"),
+        (ROOT / "templates" / "wiki" / "index.md", repo / "wiki" / "index.md"),
+        (ROOT / "templates" / "wiki" / "log.md", repo / "wiki" / "log.md"),
+    ):
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        written.append(target)
+    return written
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     repo = repo_root(Path(args.dir or os.getcwd()).resolve())
     config_path = repo / ".cairn.json"
@@ -224,6 +240,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         "scope": name,
         "repo": "/sources/repo",
         "docs": DEFAULT_DOCS,
+        "wiki": ["wiki/**/*.md"],
         "doc_repos": doc_repos,
         "sessions": {bucket: name} if bucket else {},
         "app_db": "/sources/repo/storage/development.sqlite3" if app_db.exists() else None,
@@ -232,6 +249,9 @@ def cmd_init(args: argparse.Namespace) -> None:
     }
     config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     print(f"wrote {config_path}")
+    if args.wiki:
+        for path in _scaffold_wiki(repo):
+            print(f"  wiki     {path.relative_to(repo)}")
     print(f"  name     {name}")
     print(f"  sessions {bucket or '(none — no session bucket for this cwd)'}")
     for extra in doc_repos:
@@ -323,6 +343,39 @@ def cmd_status(args: argparse.Namespace) -> None:
     print(f"  url http://127.0.0.1:{port}/mcp")
 
 
+def cmd_lint(args: argparse.Namespace) -> None:
+    config_path = Path(args.config).resolve() if args.config else find_config(Path.cwd())
+    config = read_config(config_path)
+    port = project_port(config_path.parent, config["name"])
+    params = {"limit": str(max(1, min(args.limit, 100)))}
+    if args.scope:
+        params["scope"] = args.scope
+    url = f"http://127.0.0.1:{port}/lint?{urllib.parse.urlencode(params)}"
+    try:
+        with urllib.request.urlopen(url, timeout=15) as response:
+            payload = json.load(response)
+    except (urllib.error.URLError, OSError) as exc:
+        fail(f"{config['name']} is not answering on port {port}: {exc}\nrun `cairn up` first")
+    if args.json:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return
+    claims = payload.get("claims", 0)
+    print(f"{config['name']}: {payload.get('wiki_pages', 0)} wiki pages · {claims} claims")
+    if not payload.get("wiki_pages"):
+        print("no wiki pages yet; scaffold one with `cairn init --wiki`")
+        return
+    for finding in payload.get("findings", []):
+        count = finding.get("count", 0)
+        if not count:
+            continue
+        print(f"\n{finding['kind']} · {count}")
+        for item in finding.get("examples", []):
+            print(f"  {item.get('title')}")
+            print(f"    {item.get('source_uri')}")
+    if payload.get("clean"):
+        print("\nclean: every claim cites a source and none are contested or stale")
+
+
 def cmd_ask(args: argparse.Namespace) -> None:
     config_path = Path(args.config).resolve() if args.config else find_config(Path.cwd())
     config = read_config(config_path)
@@ -409,6 +462,7 @@ def main() -> int:
     init.add_argument("--dir", help="repository directory (default: cwd)")
     init.add_argument("--name", help="project name (default: directory name)")
     init.add_argument("--doc", action="append", help="extra documentation repository (repeatable)")
+    init.add_argument("--wiki", action="store_true", help="scaffold CAIRN.md and wiki/")
     init.add_argument("--force", action="store_true", help="rewrite an existing config")
     init.set_defaults(func=cmd_init)
 
@@ -422,6 +476,13 @@ def main() -> int:
         subparser = sub.add_parser(name, help=text)
         subparser.add_argument("--config", help="path to .cairn.json")
         subparser.set_defaults(func=func)
+
+    lint = sub.add_parser("lint", help="check wiki claims against their sources")
+    lint.add_argument("--config", help="path to .cairn.json")
+    lint.add_argument("--scope", help="restrict to a scope prefix")
+    lint.add_argument("--limit", type=int, default=20, help="examples per finding (default 20)")
+    lint.add_argument("--json", action="store_true", help="print the raw lint response")
+    lint.set_defaults(func=cmd_lint)
 
     ask = sub.add_parser("ask", help="search this store and print cited hits")
     ask.add_argument("question", nargs="+", help="words to search for")

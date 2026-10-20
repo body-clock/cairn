@@ -26,6 +26,8 @@ DOC_PATTERNS = (
     "doc/**/*.md",
 )
 
+DEFAULT_WIKI = ("wiki/**/*.md",)
+
 
 @dataclass(frozen=True)
 class DocRepo:
@@ -46,6 +48,7 @@ class ProjectConfig:
     scope: str
     repo: str
     docs: tuple[str, ...] = DEFAULT_DOCS
+    wiki: tuple[str, ...] = DEFAULT_WIKI
     sessions: dict[str, str] | None = None
     doc_repos: tuple[DocRepo, ...] = ()
     app_db: str | None = None
@@ -57,9 +60,9 @@ class ProjectConfig:
         return self.name
 
 
-def _string_list(value: Any, field: str) -> tuple[str, ...]:
+def _string_list(value: Any, field: str, default: tuple[str, ...] = DEFAULT_DOCS) -> tuple[str, ...]:
     if value is None:
-        return DEFAULT_DOCS
+        return default
     if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
         raise ValueError(f"{field} must be a list of non-empty strings")
     return tuple(item.strip() for item in value)
@@ -142,6 +145,7 @@ def load(path: str | Path) -> ProjectConfig:
         scope=scope,
         repo=repo,
         docs=_string_list(data.get("docs"), "docs"),
+        wiki=_string_list(data.get("wiki"), "wiki", DEFAULT_WIKI),
         sessions=sessions,
         doc_repos=tuple(doc_repos),
         app_db=app_db,

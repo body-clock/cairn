@@ -89,7 +89,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             self._send(200, {
                 "name": "Cairn knowledge store",
-                "rest": ["/search?q=...", "/document/<id>", "/status", "/sources", "/health"],
+                "rest": ["/search?q=...", "/document/<id>", "/lint", "/status", "/sources", "/health"],
                 "mcp": "/mcp (Streamable HTTP, JSON-RPC 2.0)",
                 "tools": [tool["name"] for tool in mcp.TOOLS],
             })
@@ -122,6 +122,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._error(404, f"record not found: {doc_id}")
                 else:
                     self._send(200, document)
+            elif path == "/lint":
+                limit = int((query.get("limit") or ["20"])[0])
+                self._send(200, db.lint(
+                    conn,
+                    scope=(query.get("scope") or [None])[0],
+                    limit=max(1, min(limit, 100)),
+                ))
             elif path == "/status":
                 self._send(200, db.status(conn, DB_PATH))
             elif path == "/sources":
