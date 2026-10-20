@@ -116,7 +116,7 @@ def _upstream(port: int, path: str) -> tuple[int, dict]:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "KnowledgeInspector/0.1"
+    server_version = "CairnInspector/0.2"
 
     def log_message(self, fmt, *args):  # noqa: A003
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
@@ -189,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> int:
     server = ThreadingHTTPServer((BIND, PORT), Handler)
-    print(f"knowledge inspector: http://{BIND}:{PORT} (ports {RANGE})", flush=True)
+    print(f"cairn inspector: http://{BIND}:{PORT} (ports {RANGE})", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

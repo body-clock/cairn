@@ -121,7 +121,7 @@ class KnowledgeDbTest(unittest.TestCase):
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test"}},
         })
-        self.assertEqual(init["result"]["serverInfo"]["name"], "printlyrics-knowledge")
+        self.assertEqual(init["result"]["serverInfo"]["name"], "cairn")
 
         listed = mcp.handle_payload(self.conn, self.path, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
         names = {tool["name"] for tool in listed["result"]["tools"]}

@@ -1,1 +1,1 @@
-"""PrintLyrics knowledge service."""
+"""Cairn knowledge service."""

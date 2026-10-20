@@ -1,4 +1,4 @@
-"""SQLite storage and BM25 retrieval for the PrintLyrics knowledge base."""
+"""SQLite storage and BM25 retrieval for the Cairn knowledge store."""
 
 from __future__ import annotations
 

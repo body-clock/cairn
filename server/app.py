@@ -24,7 +24,7 @@ def get_conn():
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = f"PrintLyricsKnowledge/{mcp.SERVER_VERSION}"
+    server_version = f"Cairn/{mcp.SERVER_VERSION}"
 
     def log_message(self, fmt, *args):  # noqa: A003
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
@@ -88,7 +88,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/":
             self._send(200, {
-                "name": "PrintLyrics knowledge base",
+                "name": "Cairn knowledge store",
                 "rest": ["/search?q=...", "/document/<id>", "/status", "/sources", "/health"],
                 "mcp": "/mcp (Streamable HTTP, JSON-RPC 2.0)",
                 "tools": [tool["name"] for tool in mcp.TOOLS],

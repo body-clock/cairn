@@ -9,31 +9,26 @@ from typing import Any
 from . import db
 
 PROTOCOL_VERSION = "2025-06-18"
-SERVER_NAME = "printlyrics-knowledge"
-SERVER_VERSION = "0.1.0"
+SERVER_NAME = "cairn"
+SERVER_VERSION = "0.2.0"
 
 INSTRUCTIONS = """\
-This server is the PrintLyrics knowledge base. Before answering questions about
-PrintLyrics decisions, product history, analytics, prior investigations, or
-implementation constraints, call knowledge_search with a focused query and then
-knowledge_read on the strongest results. Cite source_uri and event_at. Treat
-generated summaries as navigation aids, not as evidence. For analytics
-questions, pass scope "printlyrics/analytics" or source_type "umami",
-"plausible_export", or "search_console_export" so measurement records are not
-buried under code-session matches. If the corpus does not contain the answer,
-say so instead of guessing.
+This server is a Cairn knowledge store for one repository. Before answering
+questions about decisions, history, code, or constraints, call knowledge_search
+with a focused query and then knowledge_read on the strongest results. Cite
+source_uri and event_at. Treat summaries as navigation aids, not as evidence.
+Use scope or source_type filters when the corpus mixes sources. If the corpus
+does not contain the answer, say so instead of guessing.
 """
 
 TOOLS = [
     {
         "name": "knowledge_search",
         "description": (
-            "Search the PrintLyrics knowledge base using SQLite FTS5/BM25 with "
-            "recency and authority weighting. Returns ranked excerpts, source "
-            "URIs, event dates, and record IDs. Use this before answering "
-            "questions about PrintLyrics history, decisions, code, analytics, "
-            "prior investigations, or constraints. For analytics questions, "
-            "filter with scope=printlyrics/analytics or a measurement source_type."
+            "Search this Cairn store using SQLite FTS5/BM25 with recency and "
+            "authority weighting. Returns ranked excerpts, source URIs, event "
+            "dates, and record IDs. Use it before answering questions about "
+            "project history, decisions, code, or constraints."
         ),
         "inputSchema": {
             "type": "object",
