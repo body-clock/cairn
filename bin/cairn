@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Run a personal knowledge store for the current repository.
+"""Run a Cairn knowledge store for the current repository.
 
-    kn init      write .knowledge.json for this repo
-    kn up        build, start, and collect once
-    kn collect   run one collection pass
-    kn status    print corpus counts
-    kn mcp       print the MCP client entry (--register writes it)
-    kn down      stop the containers, keep the database
+    cairn init      write .cairn.json for this repo
+    cairn up        build, start, and collect once
+    cairn collect   run one collection pass
+    cairn ask       search the store and print cited hits
+    cairn status    print corpus counts
+    cairn mcp       print the MCP client entry (--register writes it)
+    cairn down      stop the containers, keep the database
 """
 
 from __future__ import annotations
@@ -23,13 +24,16 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 ROOT = Path(__file__).resolve().parent.parent
 HOME = Path.home()
 SESSIONS_ROOT = HOME / ".omp" / "agent" / "sessions"
-STATE_PATH = HOME / ".omp" / "knowledge" / "projects.json"
-RUN_ROOT = HOME / ".omp" / "knowledge" / "run"
+STATE_DIR = HOME / ".cairn"
+STATE_PATH = STATE_DIR / "projects.json"
+LEGACY_STATE_PATH = HOME / ".omp" / "knowledge" / "projects.json"
+RUN_ROOT = STATE_DIR / "run"
 MCP_CONFIG = HOME / ".omp" / "agent" / "mcp.json"
+MANIFEST_NAMES = (".cairn.json", ".knowledge.json")
 BASE_COMPOSE = ROOT / "compose.project.yaml"
 
 DEFAULT_DOCS = [
@@ -43,7 +47,7 @@ DEFAULT_DOCS = [
 
 
 def fail(message: str) -> "None":
-    print(f"kn: {message}", file=sys.stderr)
+    print(f"cairn: {message}", file=sys.stderr)
     raise SystemExit(1)
 
 
@@ -90,11 +94,16 @@ def port_free(port: int) -> bool:
 
 
 def load_state() -> dict:
-    try:
-        data = json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    for path in (STATE_PATH, LEGACY_STATE_PATH):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict):
+            if path == LEGACY_STATE_PATH:
+                save_state(data)
+            return data
+    return {}
 
 
 def save_state(state: dict) -> None:
@@ -110,7 +119,9 @@ def project_port(repo: Path, name: str) -> int:
         return existing
     for port in range(8766, 8900):
         if port_free(port):
-            state[key] = {"name": name, "port": port}
+            entry = state.setdefault(key, {})
+            entry["name"] = name
+            entry["port"] = port
             save_state(state)
             return port
     fail("no free port in 8766-8899")
@@ -126,15 +137,43 @@ def _is_our_port(name: str, port: int) -> bool:
         )
     except OSError:
         return False
-    return f"knowledge-{name}" in result.stdout
+    return any(prefix in result.stdout for prefix in (f"cairn-{name}", f"knowledge-{name}"))
+
+
+def project_name(config_path: Path, config: dict) -> str:
+    """Pick and remember the compose project, keeping pre-rename stores alive."""
+    state = load_state()
+    key = str(config_path.parent.resolve())
+    entry = state.setdefault(key, {})
+    if entry.get("compose"):
+        return str(entry["compose"])
+    old, new = f"knowledge-{config['name']}", f"cairn-{config['name']}"
+    chosen = old if _project_exists(old) and not _project_exists(new) else new
+    entry["compose"] = chosen
+    entry["name"] = config["name"]
+    save_state(state)
+    return chosen
+
+
+def _project_exists(prefix: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "-a", "--filter", f"name={prefix}-", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False
+    return bool(result.stdout.strip())
 
 
 def find_config(start: Path) -> Path:
     root = repo_root(start)
-    config = root / ".knowledge.json"
-    if not config.exists():
-        fail(f"no .knowledge.json in {root}; run `kn init` first")
-    return config
+    for manifest in MANIFEST_NAMES:
+        config = root / manifest
+        if config.exists():
+            return config
+    fail(f"no .cairn.json in {root}; run `cairn init` first")
 
 
 def read_config(path: Path) -> dict:
@@ -149,9 +188,10 @@ def read_config(path: Path) -> dict:
 
 def cmd_init(args: argparse.Namespace) -> None:
     repo = repo_root(Path(args.dir or os.getcwd()).resolve())
-    config_path = repo / ".knowledge.json"
-    if config_path.exists() and not args.force:
-        fail(f"{config_path} already exists; pass --force to rewrite it")
+    config_path = repo / ".cairn.json"
+    existing = next((repo / name for name in MANIFEST_NAMES if (repo / name).exists()), None)
+    if existing and not args.force:
+        fail(f"{existing} already exists; pass --force to rewrite it")
     name = slug(args.name or repo.name)
     bucket = session_bucket(repo)
     app_db = repo / "storage" / "development.sqlite3"
@@ -224,18 +264,19 @@ def compose_env(config_path: Path, config: dict, port: int) -> tuple[dict, list[
         "services:\n  collector:\n    volumes:\n" + "\n".join(volumes) + "\n",
         encoding="utf-8",
     )
+    project = project_name(config_path, config)
     env = dict(os.environ)
     env.update(
         {
             "PROJECT_CONFIG_HOST": str(config_path.resolve()),
             "KNOWLEDGE_PORT": str(port),
             "KNOWLEDGE_NAME": str(config["name"]),
-            "COMPOSE_PROJECT_NAME": f"knowledge-{config['name']}",
+            "COMPOSE_PROJECT_NAME": project,
         }
     )
     command = [
         "docker", "compose",
-        "-p", f"knowledge-{config['name']}",
+        "-p", project,
         "-f", str(BASE_COMPOSE),
         "-f", str(override_path),
     ]
@@ -247,7 +288,7 @@ def cmd_up(args: argparse.Namespace) -> None:
     config = read_config(config_path)
     port = project_port(config_path.parent, config["name"])
     env, command = compose_env(config_path, config, port)
-    print(f"starting knowledge-{config['name']} on http://127.0.0.1:{port}")
+    print(f"starting cairn store {config['name']} on http://127.0.0.1:{port}")
     result = subprocess.run(command + ["up", "-d", "--build"], cwd=ROOT, env=env)
     if result.returncode != 0:
         fail("docker compose up failed")
@@ -275,7 +316,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/status", timeout=10) as response:
             payload = json.load(response)
     except (urllib.error.URLError, OSError) as exc:
-        fail(f"knowledge-{config['name']} is not answering on port {port}: {exc}")
+        fail(f"cairn store {config['name']} is not answering on port {port}: {exc}")
     print(f"{config['name']}: {payload.get('documents')} documents, {payload.get('database_bytes')} bytes")
     for source in payload.get("by_source", []):
         print(f"  {source['source_type']:22} {source['documents']:5}  latest {source.get('latest_event')}")
@@ -300,7 +341,7 @@ def cmd_ask(args: argparse.Namespace) -> None:
         with urllib.request.urlopen(url, timeout=10) as response:
             payload = json.load(response)
     except (urllib.error.URLError, OSError) as exc:
-        fail(f"{config['name']} is not answering on port {port}: {exc}\nrun `kn up` first")
+        fail(f"{config['name']} is not answering on port {port}: {exc}\nrun `cairn up` first")
     elapsed = (time.monotonic() - started) * 1000
     if args.json:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
@@ -326,7 +367,7 @@ def cmd_mcp(args: argparse.Namespace) -> None:
     config_path = Path(args.config).resolve() if args.config else find_config(Path.cwd())
     config = read_config(config_path)
     port = project_port(config_path.parent, config["name"])
-    server = f"{config['name']}-knowledge"
+    server = f"{config['name']}-cairn"
     entry = {"type": "http", "url": f"http://127.0.0.1:{port}/mcp", "timeout": 30000}
     if not args.register:
         print(json.dumps({"mcpServers": {server: entry}}, indent=2))
@@ -349,7 +390,7 @@ def cmd_down(args: argparse.Namespace) -> None:
     port = project_port(config_path.parent, config["name"])
     env, command = compose_env(config_path, config, port)
     subprocess.run(command + ["down"], cwd=ROOT, env=env)
-    print(f"stopped knowledge-{config['name']} (database volume kept)")
+    print(f"stopped cairn store {config['name']} (database volume kept)")
 
 
 def cmd_info(args: argparse.Namespace) -> None:
@@ -360,11 +401,11 @@ def cmd_info(args: argparse.Namespace) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="kn", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--version", action="version", version=f"kn {VERSION}")
+    parser = argparse.ArgumentParser(prog="cairn", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--version", action="version", version=f"cairn {VERSION}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    init = sub.add_parser("init", help="write .knowledge.json for a repository")
+    init = sub.add_parser("init", help="write .cairn.json for a repository")
     init.add_argument("--dir", help="repository directory (default: cwd)")
     init.add_argument("--name", help="project name (default: directory name)")
     init.add_argument("--doc", action="append", help="extra documentation repository (repeatable)")
@@ -379,12 +420,12 @@ def main() -> int:
         ("info", cmd_info, "print the resolved configuration"),
     ):
         subparser = sub.add_parser(name, help=text)
-        subparser.add_argument("--config", help="path to .knowledge.json")
+        subparser.add_argument("--config", help="path to .cairn.json")
         subparser.set_defaults(func=func)
 
     ask = sub.add_parser("ask", help="search this store and print cited hits")
     ask.add_argument("question", nargs="+", help="words to search for")
-    ask.add_argument("--config", help="path to .knowledge.json")
+    ask.add_argument("--config", help="path to .cairn.json")
     ask.add_argument("--limit", type=int, default=8, help="number of hits (default 8)")
     ask.add_argument("--scope", help="restrict to a scope prefix")
     ask.add_argument("--source-type", help="restrict to one source type")
@@ -392,7 +433,7 @@ def main() -> int:
     ask.set_defaults(func=cmd_ask)
 
     mcp = sub.add_parser("mcp", help="print the MCP client entry")
-    mcp.add_argument("--config", help="path to .knowledge.json")
+    mcp.add_argument("--config", help="path to .cairn.json")
     mcp.add_argument("--register", action="store_true", help="write the entry into ~/.omp/agent/mcp.json")
     mcp.set_defaults(func=cmd_mcp)
 

@@ -1,7 +1,7 @@
 # PrintLyrics reference deployment
 
 `compose.yaml` is the original single-project deployment behind
-`printlyrics-knowledge`. It predates the generic `kn` stack and indexes more
+`printlyrics-knowledge`. It predates the generic `cairn` stack and indexes more
 sources than a repository store:
 
 | Source | Scope | Contents |
@@ -17,7 +17,7 @@ sources than a repository store:
 ## Start
 
 ```sh
-cd /path/to/kn
+cd /path/to/cairn
 docker compose up -d --build
 docker compose run --rm collector --once
 ```

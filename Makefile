@@ -4,13 +4,13 @@ test:
 	python3 -m unittest discover -s tests -v
 
 up:
-	./bin/kn up
+	./bin/cairn up
 
 down:
-	./bin/kn down
+	./bin/cairn down
 
 ui:
-	./bin/kui
+	./bin/cairn-ui
 
 ask:
-	./bin/kn ask "$(Q)"
+	./bin/cairn ask "$(Q)"

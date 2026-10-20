@@ -1,17 +1,17 @@
-# kn
+# cairn
 
 Per-repository memory for coding agents.
 
-`kn` gives one repository its own searchable knowledge store: git history, docs,
+`cairn` gives one repository its own searchable knowledge store: git history, docs,
 ADRs, schema, runbooks, and your own agent sessions, indexed into one SQLite
 file and served over REST and MCP. Three commands, about ten seconds, no
 embeddings and no vector database.
 
 ```sh
 cd ~/code/my-project
-kn init
-kn up
-kn ask why did we choose sqlite
+cairn init
+cairn up
+cairn ask why did we choose sqlite
 ```
 
 ```
@@ -28,7 +28,7 @@ kn ask why did we choose sqlite
    We need one file the whole team can inspect and copy...
 ```
 
-[![tests](https://github.com/body-clock/kn/actions/workflows/test.yml/badge.svg)](https://github.com/body-clock/kn/actions/workflows/test.yml)
+[![tests](https://github.com/body-clock/cairn/actions/workflows/test.yml/badge.svg)](https://github.com/body-clock/cairn/actions/workflows/test.yml)
 
 ## Why
 
@@ -37,7 +37,7 @@ one. Chat history is not project memory: it is unsearchable, unversioned, and
 usually gone in 30 days. The evidence already exists on disk — commits, docs,
 agent transcripts — but nothing joins it into one queryable surface.
 
-`kn` is deliberately small:
+`cairn` is deliberately small:
 
 - **One store per repository**, one Docker volume, one port.
 - **BM25 over SQLite FTS5**, recency-weighted, with a source-authority boost.
@@ -47,32 +47,32 @@ agent transcripts — but nothing joins it into one queryable surface.
 ## Requirements
 
 - Docker with Compose v2
-- Python 3.9+ on the host (only for the `kn` CLI)
+- Python 3.9+ on the host (only for the `cairn` CLI)
 - Optional: [`omp`](https://github.com/can1357/oh-my-pi) for agent-session
   ingestion and MCP integration
 
 ## Install
 
 ```sh
-git clone https://github.com/body-clock/kn.git ~/code/kn
-ln -s ~/code/kn/bin/kn ~/.local/bin/kn   # ~/.local/bin must be on PATH
+git clone https://github.com/body-clock/cairn.git ~/code/cairn
+ln -s ~/code/cairn/bin/cairn ~/.local/bin/cairn   # ~/.local/bin must be on PATH
 ```
 
-Or run it from the checkout: `~/code/kn/bin/kn`.
+Or run it from the checkout: `~/code/cairn/bin/cairn`.
 
 ## Use
 
 ```sh
 cd ~/code/my-project
-kn init          # writes .knowledge.json for this repository
-kn up            # build, start, collect once (~10s)
-kn ask "why sqlite"
-kn status
-kn mcp --register   # add this store to ~/.omp/agent/mcp.json
-kn down             # stop; the volume is kept
+cairn init          # writes .cairn.json for this repository
+cairn up            # build, start, collect once (~10s)
+cairn ask "why sqlite"
+cairn status
+cairn mcp --register   # add this store to ~/.omp/agent/mcp.json
+cairn down             # stop; the volume is kept
 ```
 
-`kn init` detects the repository root, derives a project name, finds the agent
+`cairn init` detects the repository root, derives a project name, finds the agent
 session bucket for that working directory, and sets `git_limit` from the commit
 count. It writes one small manifest:
 
@@ -93,7 +93,7 @@ count. It writes one small manifest:
 
 Ports are allocated from 8766 upward and recorded in
 `~/.omp/knowledge/projects.json`. Each project runs as its own compose project
-(`knowledge-<name>`) with its own `knowledge-data` volume, so stores never mix.
+(`cairn-<name>`) with its own `knowledge-data` volume, so stores never mix.
 
 ## What gets indexed
 
@@ -120,9 +120,9 @@ flowchart LR
     Q --> H[HTTP server]
     H --> A[REST /search /document]
     H --> M[MCP /mcp]
-    A --> K[kn ask]
+    A --> K[cairn ask]
     M --> E[your agent]
-    Q --> U[kui inspector]
+    Q --> U[Cairn inspector]
 ```
 
 - One SQLite file, WAL mode, FTS5 external-content index kept in sync by triggers.
@@ -136,14 +136,14 @@ flowchart LR
 
 | Command | Does |
 |---|---|
-| `kn init [--name N] [--doc PATH]… [--force]` | Write `.knowledge.json` |
-| `kn up` | Build, start, and collect once |
-| `kn collect` | Run one collection pass |
-| `kn ask Q [--limit N] [--scope S] [--source-type T] [--json]` | Search and print cited hits |
-| `kn status` | Corpus counts and latest event per source |
-| `kn mcp [--register]` | Print or install the MCP client entry |
-| `kn info` | Resolved configuration |
-| `kn down` | Stop containers; keep the volume |
+| `cairn init [--name N] [--doc PATH]… [--force]` | Write `.cairn.json` |
+| `cairn up` | Build, start, and collect once |
+| `cairn collect` | Run one collection pass |
+| `cairn ask Q [--limit N] [--scope S] [--source-type T] [--json]` | Search and print cited hits |
+| `cairn status` | Corpus counts and latest event per source |
+| `cairn mcp [--register]` | Print or install the MCP client entry |
+| `cairn info` | Resolved configuration |
+| `cairn down` | Stop containers; keep the volume |
 
 ## MCP
 
@@ -172,7 +172,7 @@ If `KNOWLEDGE_TOKEN` is set, add `"headers": {"Authorization": "Bearer <token>"}
 ## Inspector
 
 ```sh
-./bin/kui
+./bin/cairn-ui
 # http://127.0.0.1:8790
 ```
 
@@ -200,8 +200,8 @@ docker compose -f compose.project.yaml build
 Layout:
 
 ```
-bin/kn            CLI (stdlib only)
-bin/kui           inspector launcher
+bin/cairn            CLI (stdlib only)
+bin/cairn-ui           inspector launcher
 collector/        git, docs, sessions, app_db, umami, exports
 server/           REST + MCP + FTS5 retrieval
 ui/               single-page inspector

@@ -1,7 +1,7 @@
 services:
   knowledge:
     build: .
-    image: kn:local
+    image: cairn:local
     init: true
     restart: unless-stopped
     ports:
@@ -23,7 +23,7 @@ services:
 
   collector:
     build: .
-    image: kn:local
+    image: cairn:local
     init: true
     restart: unless-stopped
     entrypoint: ["python", "-m", "collector.collect"]
